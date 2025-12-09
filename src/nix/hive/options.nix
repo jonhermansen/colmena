@@ -333,6 +333,39 @@ rec {
           default = true;
           type = types.bool;
         };
+        systemType = lib.mkOption {
+          description = ''
+            The type of system to deploy.
+
+            - "nixos" (default): NixOS system using switch-to-configuration for activation.
+            - "darwin": macOS system using nix-darwin activation scripts.
+
+            When using flakes, this is automatically detected from darwinConfigurations
+            if not explicitly set.
+          '';
+          type = types.enum [ "nixos" "darwin" ];
+          default = "nixos";
+        };
+        nix-darwin = lib.mkOption {
+          description = ''
+            The nix-darwin flake input for evaluating darwin nodes.
+
+            This must be set when deploying to darwin nodes with Flakes.
+            For example:
+
+              {
+                inputs.nix-darwin.url = "github:LnL7/nix-darwin";
+                outputs = { nixpkgs, nix-darwin, ... }: {
+                  colmena = {
+                    meta.nix-darwin = nix-darwin;
+                    # ...
+                  };
+                };
+              }
+          '';
+          type = types.nullOr types.unspecified;
+          default = null;
+        };
       };
     };
 }

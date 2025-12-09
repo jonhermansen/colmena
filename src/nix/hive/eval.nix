@@ -16,7 +16,17 @@ let
     # containing configurations that will be applied to all
     # hosts.
     defaults = { };
+
+    # Darwin-specific defaults (only applied to darwin nodes)
+    darwinDefaults = { };
   };
+
+  # Check if a node is defined in darwinConfigurations (for auto-detection)
+  isDarwinFromFlake =
+    name:
+    rawFlake != null
+    && rawFlake.outputs ? darwinConfigurations
+    && rawFlake.outputs.darwinConfigurations ? ${name};
 
   uncheckedHive =
     let
@@ -147,11 +157,27 @@ let
   lib = nixpkgs.lib;
   reservedNames = [
     "defaults"
+    "darwinDefaults"
     "network"
     "meta"
   ];
 
-  evalNode =
+  # Determine system type for a node
+  # Priority: 1. Explicit deployment.systemType, 2. Auto-detect from darwinConfigurations
+  getNodeSystemType =
+    name: configs:
+    let
+      explicitType = lib.findFirst (c: c ? deployment && c.deployment ? systemType) null configs;
+    in
+    if explicitType != null then
+      explicitType.deployment.systemType
+    else if isDarwinFromFlake name then
+      "darwin"
+    else
+      "nixos";
+
+  # Evaluate a NixOS node
+  evalNixOSNode =
     name: configs:
     let
       npkgs =
@@ -211,6 +237,70 @@ let
       // (hive.meta.nodeSpecialArgs.${name} or { });
     };
 
+  # Evaluate a darwin node
+  evalDarwinNode =
+    name: configs:
+    let
+      npkgs =
+        if hasAttr name hive.meta.nodeNixpkgs then
+          mkNixpkgs "meta.nodeNixpkgs.${name}" hive.meta.nodeNixpkgs.${name}
+        else
+          nixpkgs;
+
+      darwinInput = hive.meta.nix-darwin or null;
+      _ =
+        assert lib.assertMsg (darwinInput != null)
+          "meta.nix-darwin must be set when deploying darwin nodes. Add your nix-darwin flake input to meta.nix-darwin.";
+        true;
+
+      evalConfig =
+        if darwinInput ? lib.darwinSystem then
+          darwinInput.lib.darwinSystem
+        else if darwinInput ? darwinSystem then
+          darwinInput.darwinSystem
+        else
+          throw "Could not find darwinSystem in meta.nix-darwin. Expected nix-darwin flake input.";
+
+      nixpkgsModule =
+        { config, lib, ... }:
+        let
+          hasTypedConfig = lib.versionAtLeast lib.version "22.11pre";
+        in
+        {
+          nixpkgs.overlays = lib.mkBefore npkgs.overlays;
+          nixpkgs.config =
+            if hasTypedConfig then lib.mkBefore npkgs.config else lib.mkOptionDefault npkgs.config;
+        };
+
+      darwinDefaults = hive.darwinDefaults or { };
+    in
+    evalConfig {
+      inherit (npkgs.stdenv.hostPlatform) system;
+
+      modules = [
+        nixpkgsModule
+        colmenaModules.assertionModule
+        colmenaOptions.deploymentOptions
+        hive.defaults
+        darwinDefaults
+      ]
+      ++ configs;
+      specialArgs = {
+        inherit name;
+        nodes = uncheckedNodes;
+      }
+      // hive.meta.specialArgs
+      // (hive.meta.nodeSpecialArgs.${name} or { });
+    };
+
+  # Evaluate a node based on its system type
+  evalNode =
+    name: configs:
+    let
+      systemType = getNodeSystemType name configs;
+    in
+    if systemType == "darwin" then evalDarwinNode name configs else evalNixOSNode name configs;
+
   nodeNames = filter (name: !elem name reservedNames) (attrNames hive);
 
   # Used as the `nodes` argument in modules. We skip recursive type checking
@@ -241,6 +331,14 @@ let
     "allowApplyAll"
   ];
 
+  # Get the toplevel/system output based on node system type
+  getNodeToplevel =
+    name: node:
+    let
+      systemType = getNodeSystemType name (configsFor name);
+    in
+    if systemType == "darwin" then node.system else node.config.system.build.toplevel;
+
 in
 rec {
   # Exported attributes
@@ -252,7 +350,7 @@ rec {
       value = evalNode name (configsFor name);
     }) nodeNames
   );
-  toplevel = lib.mapAttrs (_: v: v.config.system.build.toplevel) nodes;
+  toplevel = lib.mapAttrs getNodeToplevel nodes;
   deploymentConfig = lib.mapAttrs (_: v: v.config.deployment) nodes;
   deploymentConfigSelected = names: lib.filterAttrs (name: _: elem name names) deploymentConfig;
   evalSelected = names: lib.filterAttrs (name: _: elem name names) toplevel;
