@@ -1,7 +1,10 @@
-use regex::Regex;
 use std::collections::HashMap;
 
 use clap::Args;
+
+#[cfg(target_os = "linux")]
+use regex::Regex;
+#[cfg(target_os = "linux")]
 use tokio::fs;
 
 use crate::error::ColmenaError;
@@ -66,16 +69,19 @@ pub async fn run(
         quit::with_code(1);
     }
 
-    // Sanity check: Are we running NixOS?
-    if let Ok(os_release) = fs::read_to_string("/etc/os-release").await {
-        let re = Regex::new(r#"ID="?nixos"?"#).unwrap();
-        if !re.is_match(&os_release) {
-            tracing::error!("\"apply-local\" only works on NixOS machines.");
+    // Sanity check: Are we running NixOS? (Skipped on macOS, where nix-darwin is assumed.)
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(os_release) = fs::read_to_string("/etc/os-release").await {
+            let re = Regex::new(r#"ID="?nixos"?"#).unwrap();
+            if !re.is_match(&os_release) {
+                tracing::error!("\"apply-local\" only works on NixOS or nix-darwin machines.");
+                quit::with_code(5);
+            }
+        } else {
+            tracing::error!("Could not detect the OS version from /etc/os-release.");
             quit::with_code(5);
         }
-    } else {
-        tracing::error!("Could not detect the OS version from /etc/os-release.");
-        quit::with_code(5);
     }
 
     let verbose = verbose || sudo; // cannot use spinners with interactive sudo
