@@ -2,6 +2,7 @@
   rawHive ? null, # Colmena Hive attrset
   rawFlake ? null, # Nix Flake attrset with `outputs.colmena`
   hermetic ? rawFlake != null, # Whether we are allowed to use <nixpkgs>
+  bundledLib ? null, # lib from colmena's own nixpkgs input; lets meta.nixpkgs be omitted
   colmenaOptions ? import ./options.nix,
   colmenaModules ? import ./modules.nix,
 }:
@@ -141,20 +142,21 @@ let
         - A Nixpkgs attribute set
       '';
 
+  # `nixpkgs` stays lazy. With bundledLib, meta.nixpkgs becomes optional —
+  # accessing this only throws if a node actually falls back here (i.e.
+  # lacks a meta.nodeNixpkgs.<name> entry).
   nixpkgs =
-    let
-      # Can't rely on the module system yet
-      nixpkgsConf =
-        if uncheckedUserMeta ? nixpkgs then
-          uncheckedUserMeta.nixpkgs
-        else if hermetic then
-          throw "meta.nixpkgs must be specified in hermetic mode."
-        else
-          <nixpkgs>;
-    in
-    mkNixpkgs "meta.nixpkgs" nixpkgsConf;
+    if uncheckedUserMeta ? nixpkgs then
+      mkNixpkgs "meta.nixpkgs" uncheckedUserMeta.nixpkgs
+    else if bundledLib != null then
+      throw "meta.nixpkgs is not set; every node must have a meta.nodeNixpkgs.<name> entry."
+    else if hermetic then
+      throw "meta.nixpkgs must be specified in hermetic mode."
+    else
+      mkNixpkgs "meta.nixpkgs" <nixpkgs>;
 
-  lib = nixpkgs.lib;
+  # Prefer the bundled lib so meta.nixpkgs can be omitted.
+  lib = if bundledLib != null then bundledLib else nixpkgs.lib;
   reservedNames = [
     "defaults"
     "darwinDefaults"

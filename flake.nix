@@ -176,6 +176,9 @@
         import ./src/nix/hive/eval.nix {
           inherit rawHive colmenaOptions colmenaModules;
           hermetic = true;
+          # Pass colmena's own nixpkgs.lib so hives that fully specify
+          # meta.nodeNixpkgs don't need to set meta.nixpkgs.
+          bundledLib = nixpkgs.lib;
         };
 
       githubActions = nix-github-actions.lib.mkGithubMatrix {
